@@ -78,3 +78,34 @@ func TestParseHeaders(t *testing.T) {
 	assert.Equal(t, 0, n)
 	assert.False(t, done)
 }
+
+func TestParseMultipleHeaders(t *testing.T) {
+	t.Run("Valid multiple headers", func(t *testing.T) {
+		headers := NewHeaders()
+		// Parse is called multiple times to simulate incremental parsing
+
+		// First call: parse first header line
+		data := []byte("Set-Person: A\r\nset-person: B\r\n\r\n")
+		n, done, err := headers.Parse(data)
+
+		require.NoError(t, err)
+		assert.False(t, done)
+		assert.Equal(t, 15, n)
+		assert.Equal(t, "A", headers["set-person"])
+
+		// Second call: parse remaining data
+		n2, done2, err2 := headers.Parse(data[n:])
+
+		require.NoError(t, err2)
+		assert.False(t, done2)
+		assert.Equal(t, 15, n2)
+		assert.Equal(t, "A,B", headers["set-person"])
+
+		// Third call: parse final empty line
+		n3, done3, err3 := headers.Parse(data[n+n2:])
+
+		require.NoError(t, err3)
+		assert.True(t, done3)
+		assert.Equal(t, 2, n3)
+	})
+}
