@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"httpfromtcp/internal/response"
 	"log"
 	"net"
 	"strconv"
@@ -71,21 +72,16 @@ func (s *Server) handle(conn net.Conn) {
 		conn.Close()
 	}()
 
-	statusLine := "HTTP/1.1 200 OK\r\n"
-	contentType := "Content-Type: text/plain\r\n"
-	body := "Hello World!"
-	contentLength := fmt.Sprintf("Content-Length: %d\r\n", len(body))
-
-	response := statusLine +
-		contentType +
-		contentLength +
-		"\r\n" +
-		body
-
-	_, err := conn.Write([]byte(response))
+	err := response.WriteStatusLine(conn, response.StatusOK)
 	if err != nil {
-		log.Printf("ERROR: Cannot send response to %s: %v", conn.RemoteAddr(), err)
+		log.Printf("ERROR: Cannot send status line to %s: %v", conn.RemoteAddr(), err)
 		return
 	}
-	log.Printf("Sent response to %s", conn.RemoteAddr())
+
+	defaultHeaders := response.GetDefaultHeaders(0)
+	err = response.WriteHeaders(conn, defaultHeaders)
+	if err != nil {
+		log.Printf("ERROR: Cannot send headers to %s: %v", conn.RemoteAddr(), err)
+		return
+	}
 }
