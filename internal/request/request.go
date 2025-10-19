@@ -3,11 +3,14 @@ package request
 import (
 	"bytes"
 	"fmt"
+	"httpfromtcp/internal/headers"
 	"io"
+	"regexp"
 )
 
 type Request struct {
 	RequestLine RequestLine
+	Headers     headers.Headers
 	state       RequestStatus
 }
 
@@ -26,9 +29,12 @@ type RequestLine struct {
 }
 
 func (r *Request) done() bool {
-	return r.state == StateDone || r.state == StateHeaders
+	return r.state == StateDone
 }
 
+// RequestFromReader reads and parses an HTTP request from the provided reader.
+// It incrementally reads data and parses the request line and headers.
+// Returns a fully parsed Request or an error if parsing fails.
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	const bufferSize = 8
 	buf := make([]byte, bufferSize)
@@ -46,10 +52,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			buf = newBuf
 		}
 
-		n, err := reader.Read(buf[readToIndex:])
-		if err != nil {
-			return nil, err
-		}
+		n, readErr := reader.Read(buf[readToIndex:])
 		readToIndex += n
 
 		bytesParsed, err := request.parse(buf[:readToIndex])
@@ -60,20 +63,26 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 			readToIndex = remainingBytes
 		}
 
-		if err == io.EOF {
-			if !request.done() {
-				return nil, fmt.Errorf("connection closed before request was fully parsed")
-			}
-			break
-		}
 		if err != nil {
 			return nil, err
+		}
+
+		if readErr != nil {
+			if readErr == io.EOF {
+				if !request.done() {
+					return nil, fmt.Errorf("connection closed before request was fully parsed")
+				}
+				break
+			}
+			return nil, readErr
 		}
 	}
 
 	return request, nil
 }
 
+// Parse processes the provided data buffer and advances the request parsing state.
+// Returns the number of bytes consumed and any error encountered during parsing.
 func (r *Request) parse(data []byte) (int, error) {
 	bytesConsumed := 0
 
@@ -93,8 +102,24 @@ func (r *Request) parse(data []byte) (int, error) {
 			r.state = StateHeaders
 
 		case StateHeaders:
-			r.state = StateDone
-			return bytesConsumed, nil
+			if r.Headers == nil {
+				r.Headers = headers.NewHeaders()
+			}
+			n, done, err := r.Headers.Parse(data[bytesConsumed:])
+			if err != nil {
+				return 0, err
+			}
+			if n == 0 {
+				return bytesConsumed, nil
+			}
+
+			bytesConsumed += n
+
+			if done {
+				r.state = StateDone
+			} else {
+				return bytesConsumed, nil
+			}
 
 		case StateDone:
 			return bytesConsumed, nil
@@ -105,6 +130,11 @@ func (r *Request) parse(data []byte) (int, error) {
 	}
 }
 
+var validMethod = regexp.MustCompile("^[A-Z]+$")
+
+// parseRequestLine extracts the HTTP method, request target, and version from the first line.
+// Returns the parsed RequestLine, number of bytes consumed (including CRLF), and any parsing error.
+// Returns (nil, 0, nil) if there is insufficient data to parse a complete line.
 func parseRequestLine(data []byte) (*RequestLine, int, error) {
 	crlfIndex := bytes.Index(data, []byte("\r\n"))
 	if crlfIndex == -1 {
@@ -130,6 +160,10 @@ func parseRequestLine(data []byte) (*RequestLine, int, error) {
 	version := versionParts[1]
 	if !bytes.Equal(version, []byte("1.1")) {
 		return nil, 0, fmt.Errorf("invalid HTTP version: %s, only 1.1 is supported", version)
+	}
+
+	if !validMethod.Match(method) {
+		return nil, 0, fmt.Errorf("invalid method: %s", method)
 	}
 
 	return &RequestLine{
