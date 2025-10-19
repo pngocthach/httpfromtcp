@@ -6,11 +6,13 @@ import (
 	"httpfromtcp/internal/headers"
 	"io"
 	"regexp"
+	"strconv"
 )
 
 type Request struct {
 	RequestLine RequestLine
 	Headers     headers.Headers
+	Body        []byte
 	state       RequestStatus
 }
 
@@ -19,6 +21,7 @@ type RequestStatus int
 const (
 	StateInit RequestStatus = iota
 	StateHeaders
+	StateBody
 	StateDone
 )
 
@@ -116,7 +119,41 @@ func (r *Request) parse(data []byte) (int, error) {
 			bytesConsumed += n
 
 			if done {
+				r.state = StateBody
+			} else {
+				return bytesConsumed, nil
+			}
+
+		case StateBody:
+			contentLengthStr := r.Headers.Get("Content-Length")
+			if contentLengthStr == "" {
 				r.state = StateDone
+				continue
+			}
+
+			contentLength, convErr := strconv.Atoi(contentLengthStr)
+			if convErr != nil || contentLength < 0 {
+				return 0, fmt.Errorf("invalid Content-Length: %q", contentLengthStr)
+			}
+
+			if contentLength == 0 {
+				r.state = StateDone
+				continue
+			}
+
+			bytesNeeded := contentLength - len(r.Body)
+			bytesAvailable := len(data) - bytesConsumed
+			bytesToConsume := min(bytesNeeded, bytesAvailable)
+
+			if bytesToConsume > 0 {
+				r.Body = append(r.Body, data[bytesConsumed:bytesConsumed+bytesToConsume]...)
+				bytesConsumed += bytesToConsume
+			}
+
+			if len(r.Body) == contentLength {
+				r.state = StateDone
+			} else if len(r.Body) > contentLength {
+				return 0, fmt.Errorf("received more body data than Content-Length specified")
 			} else {
 				return bytesConsumed, nil
 			}

@@ -3,12 +3,18 @@ package headers
 import (
 	"bytes"
 	"fmt"
+	"strings"
 )
 
 type Headers map[string]string
 
 func NewHeaders() Headers {
 	return make(Headers)
+}
+
+func (h Headers) Get(key string) string {
+	// Chuẩn hóa key về viết thường trước khi tìm
+	return h[strings.ToLower(key)]
 }
 
 // Parse parses the provided data and returns the number of bytes consumed,

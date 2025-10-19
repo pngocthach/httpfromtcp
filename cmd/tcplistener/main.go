@@ -36,6 +36,14 @@ func main() {
 			request.RequestLine.RequestTarget,
 			request.RequestLine.HttpVersion)
 
+		for key, value := range request.Headers {
+			fmt.Printf("Header: %s: %s\n", key, value)
+		}
+
+		if len(request.Body) > 0 {
+			fmt.Printf("Body: %s\n", string(request.Body))
+		}
+
 		fmt.Printf("Connection close from %s\n", conn.RemoteAddr())
 	}
 }
