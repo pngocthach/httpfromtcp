@@ -1,18 +1,17 @@
 package server
 
 import (
-	"bytes"
 	"fmt"
+	"httpfromtcp/internal/headers"
 	"httpfromtcp/internal/request"
 	"httpfromtcp/internal/response"
-	"io"
 	"log"
 	"net"
 	"strconv"
 	"sync/atomic"
 )
 
-type Handler func(w io.Writer, req *request.Request) *HandlerError
+type Handler func(w *response.Writer, req *request.Request)
 
 type HandlerError struct {
 	StatusCode response.StatusCode
@@ -87,67 +86,18 @@ func (s *Server) handle(conn net.Conn) {
 	req, err := request.RequestFromReader(conn)
 	if err != nil {
 		log.Printf("ERROR: Cannot read request: %v", err)
-		writeHandlerError(conn, &HandlerError{
-			StatusCode: response.StatusBadRequest,
-			Message:    fmt.Sprintf("Bad Request: %v", err),
-		})
+		errWriter := response.NewWriter(conn)
+		errWriter.WriteStatusLine(response.StatusBadRequest)
+		h := headers.NewHeaders()
+		h.Set("Connection", "close")
+		h.Set("Content-Type", "text/plain")
+		errWriter.WriteHeaders(h) // Ghi cả dòng trống
+		errWriter.WriteBody([]byte(fmt.Sprintf("Bad Request: %v\n", err)))
 		return
 	}
 
-	responseBodyBuf := new(bytes.Buffer)
-	handlerErr := s.handler(responseBodyBuf, req)
-	if handlerErr != nil {
-		writeHandlerError(conn, handlerErr)
-		return
-	}
-
-	err = response.WriteStatusLine(conn, response.StatusOK)
-	if err != nil {
-		log.Printf("ERROR: Cannot write status line: %v", err)
-		return
-	}
-
-	headers := response.GetDefaultHeaders(responseBodyBuf.Len())
-	err = response.WriteHeaders(conn, headers)
-	if err != nil {
-		log.Printf("ERROR: Cannot write headers: %v", err)
-		return
-	}
-
-	if responseBodyBuf.Len() > 0 {
-		_, err = conn.Write(responseBodyBuf.Bytes())
-		if err != nil {
-			log.Printf("ERROR: Cannot write body: %v", err)
-			return
-		}
-	} else {
-		_, err = conn.Write([]byte(""))
-		if err != nil {
-			log.Printf("ERROR: Cannot write empty body: %v", err)
-			return
-		}
-	}
+	responseWriter := response.NewWriter(conn)
+	s.handler(responseWriter, req)
 
 	log.Printf("Sent response to %s", conn.RemoteAddr())
-}
-
-func writeHandlerError(w io.Writer, handlerErr *HandlerError) {
-	err := response.WriteStatusLine(w, handlerErr.StatusCode)
-	if err != nil {
-		log.Printf("ERROR: Cannot write status line: %v", err)
-		return
-	}
-
-	errorHeaders := response.GetDefaultHeaders(len(handlerErr.Message))
-	err = response.WriteHeaders(w, errorHeaders)
-	if err != nil {
-		log.Printf("ERROR: Cannot write headers: %v", err)
-		return
-	}
-
-	_, err = w.Write([]byte(handlerErr.Message))
-	if err != nil {
-		log.Printf("ERROR: Cannot write body: %v", err)
-		return
-	}
 }

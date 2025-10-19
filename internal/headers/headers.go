@@ -13,8 +13,11 @@ func NewHeaders() Headers {
 }
 
 func (h Headers) Get(key string) string {
-	// Chuẩn hóa key về viết thường trước khi tìm
 	return h[strings.ToLower(key)]
+}
+
+func (h Headers) Set(key, value string) {
+	h[strings.ToLower(key)] = value
 }
 
 // Parse parses the provided data and returns the number of bytes consumed,

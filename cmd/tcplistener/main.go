@@ -1,55 +1,77 @@
 package main
 
 import (
-	"httpfromtcp/internal/request"  // Thêm import request
-	"httpfromtcp/internal/response" // Thêm import response
+	"httpfromtcp/internal/headers"
+	"httpfromtcp/internal/request"
+	"httpfromtcp/internal/response"
 	"httpfromtcp/internal/server"
-	"io" // Thêm import io
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 )
 
-const port = 42069
+const port = 3000
 
-func myHandler(w io.Writer, req *request.Request) *server.HandlerError {
+const html400 = `<html><head><title>400 Bad Request</title></head><body><h1>Bad Request</h1><p>The request could not be processed.</p></body></html>`
+const html500 = `<html><head><title>500 Internal Server Error</title></head><body><h1>Internal Server Error</h1><p>An unexpected error occurred on the server.</p></body></html>`
+const html200 = `<html><head><title>200 OK</title></head><body><h1>Success</h1><p>Request processed successfully.</p></body></html>`
+
+func myHandler(w *response.Writer, req *request.Request) {
 	log.Printf("Handling request for target: %s", req.RequestLine.RequestTarget)
 
+	var statusCode response.StatusCode
+	var bodyHTML string
+
 	switch req.RequestLine.RequestTarget {
-	case "/yourproblem":
-		return &server.HandlerError{
-			StatusCode: response.StatusBadRequest,
-			Message:    "Your problem is not my problem\n",
-		}
-	case "/myproblem":
-		return &server.HandlerError{
-			StatusCode: response.StatusInternalServerError,
-			Message:    "Woopsie, my bad\n",
-		}
+	case "/api/error":
+		statusCode = response.StatusBadRequest
+		bodyHTML = html400
+	case "/api/internal":
+		statusCode = response.StatusInternalServerError
+		bodyHTML = html500
 	default:
-		_, err := w.Write([]byte("All good, frfr\n"))
-		if err != nil {
-			log.Printf("Error writing response body: %v", err)
-			return &server.HandlerError{
-				StatusCode: response.StatusInternalServerError,
-				Message:    "Failed to write response body\n",
-			}
-		}
-		return nil
+		statusCode = response.StatusOK
+		bodyHTML = html200
 	}
+
+	err := w.WriteStatusLine(statusCode)
+	if err != nil {
+		log.Printf("Error writing status line: %v", err)
+		return
+	}
+
+	h := headers.NewHeaders()
+	h.Set("Content-Type", "text/html")
+	h.Set("Content-Length", strconv.Itoa(len(bodyHTML)))
+	h.Set("Connection", "close")
+
+	err = w.WriteHeaders(h)
+	if err != nil {
+		log.Printf("Error writing headers: %v", err)
+		return
+	}
+
+	_, err = w.WriteBody([]byte(bodyHTML))
+	if err != nil {
+		log.Printf("Error writing body: %v", err)
+		return
+	}
+
+	log.Printf("Sent response %d for %s", statusCode, req.RequestLine.RequestTarget)
 }
 
 func main() {
-	server, err := server.Serve(port, myHandler)
+	srv, err := server.Serve(port, myHandler)
 	if err != nil {
 		log.Fatalf("Error starting server: %v", err)
 	}
-	defer server.Close()
-	log.Println("Server started on port", port)
+	defer srv.Close()
+	log.Printf("Server started on port %d", port)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
-	log.Println("Server gracefully stopped")
+	log.Println("Received shutdown signal, stopping server...")
 }

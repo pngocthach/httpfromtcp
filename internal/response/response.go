@@ -2,9 +2,8 @@ package response
 
 import (
 	"fmt"
-	"httpfromtcp/internal/headers"
+	"httpfromtcp/internal/headers" // Import headers
 	"io"
-	"strconv"
 )
 
 type StatusCode int
@@ -21,43 +20,62 @@ var reasonPhrases = map[StatusCode]string{
 	StatusInternalServerError: "Internal Server Error",
 }
 
-func WriteStatusLine(w io.Writer, statusCode StatusCode) error {
+type Writer struct {
+	conn           io.Writer
+	statusWritten  bool
+	headersWritten bool
+}
+
+func NewWriter(w io.Writer) *Writer {
+	return &Writer{conn: w}
+}
+
+func (w *Writer) WriteStatusLine(statusCode StatusCode) error {
+	if w.statusWritten {
+		return fmt.Errorf("status line already written")
+	}
+
 	reasonPhrase, ok := reasonPhrases[statusCode]
 	if !ok {
 		reasonPhrase = ""
 	}
-
 	statusLine := fmt.Sprintf("HTTP/1.1 %d %s\r\n", statusCode, reasonPhrase)
 
-	_, err := w.Write([]byte(statusLine))
-	if err != nil {
-		return fmt.Errorf("error writing status line: %w", err)
+	_, err := w.conn.Write([]byte(statusLine))
+	if err == nil {
+		w.statusWritten = true
 	}
-	return nil
+	return err
 }
 
-func GetDefaultHeaders(contentLen int) headers.Headers {
-	h := headers.NewHeaders()
-	h["content-length"] = strconv.Itoa(contentLen)
-	h["connection"] = "close"
-	h["content-type"] = "text/plain"
+func (w *Writer) WriteHeaders(h headers.Headers) error {
+	if !w.statusWritten {
+		return fmt.Errorf("must write status line before writing headers")
+	}
+	if w.headersWritten {
+		return fmt.Errorf("headers already written")
+	}
 
-	return h
-}
-
-func WriteHeaders(w io.Writer, h headers.Headers) error {
 	for key, value := range h {
 		headerLine := fmt.Sprintf("%s: %s\r\n", key, value)
-		_, err := w.Write([]byte(headerLine))
+		_, err := w.conn.Write([]byte(headerLine))
 		if err != nil {
 			return fmt.Errorf("error writing header '%s': %w", key, err)
 		}
 	}
 
-	_, err := w.Write([]byte("\r\n"))
-	if err != nil {
-		return fmt.Errorf("error writing empty line after headers: %w", err)
+	_, err := w.conn.Write([]byte("\r\n"))
+	if err == nil {
+		w.headersWritten = true
+	}
+	return err
+}
+
+func (w *Writer) WriteBody(body []byte) (int, error) {
+	if !w.headersWritten {
+		return 0, fmt.Errorf("must write headers (including blank line) before writing body")
 	}
 
-	return nil
+	n, err := w.conn.Write(body)
+	return n, err
 }
