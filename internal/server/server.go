@@ -1,20 +1,31 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
+	"httpfromtcp/internal/request"
 	"httpfromtcp/internal/response"
+	"io"
 	"log"
 	"net"
 	"strconv"
 	"sync/atomic"
 )
 
+type Handler func(w io.Writer, req *request.Request) *HandlerError
+
+type HandlerError struct {
+	StatusCode response.StatusCode
+	Message    string
+}
+
 type Server struct {
 	listener net.Listener
+	handler  Handler
 	isClosed atomic.Bool
 }
 
-func Serve(port int) (*Server, error) {
+func Serve(port int, handler Handler) (*Server, error) {
 	addr := ":" + strconv.Itoa(port)
 
 	listener, err := net.Listen("tcp", addr)
@@ -24,6 +35,7 @@ func Serve(port int) (*Server, error) {
 
 	server := &Server{
 		listener: listener,
+		handler:  handler,
 	}
 	server.isClosed.Store(false)
 
@@ -72,16 +84,70 @@ func (s *Server) handle(conn net.Conn) {
 		conn.Close()
 	}()
 
-	err := response.WriteStatusLine(conn, response.StatusOK)
+	req, err := request.RequestFromReader(conn)
 	if err != nil {
-		log.Printf("ERROR: Cannot send status line to %s: %v", conn.RemoteAddr(), err)
+		log.Printf("ERROR: Cannot read request: %v", err)
+		writeHandlerError(conn, &HandlerError{
+			StatusCode: response.StatusBadRequest,
+			Message:    fmt.Sprintf("Bad Request: %v", err),
+		})
 		return
 	}
 
-	defaultHeaders := response.GetDefaultHeaders(0)
-	err = response.WriteHeaders(conn, defaultHeaders)
+	responseBodyBuf := new(bytes.Buffer)
+	handlerErr := s.handler(responseBodyBuf, req)
+	if handlerErr != nil {
+		writeHandlerError(conn, handlerErr)
+		return
+	}
+
+	err = response.WriteStatusLine(conn, response.StatusOK)
 	if err != nil {
-		log.Printf("ERROR: Cannot send headers to %s: %v", conn.RemoteAddr(), err)
+		log.Printf("ERROR: Cannot write status line: %v", err)
+		return
+	}
+
+	headers := response.GetDefaultHeaders(responseBodyBuf.Len())
+	err = response.WriteHeaders(conn, headers)
+	if err != nil {
+		log.Printf("ERROR: Cannot write headers: %v", err)
+		return
+	}
+
+	if responseBodyBuf.Len() > 0 {
+		_, err = conn.Write(responseBodyBuf.Bytes())
+		if err != nil {
+			log.Printf("ERROR: Cannot write body: %v", err)
+			return
+		}
+	} else {
+		_, err = conn.Write([]byte(""))
+		if err != nil {
+			log.Printf("ERROR: Cannot write empty body: %v", err)
+			return
+		}
+	}
+
+	log.Printf("Sent response to %s", conn.RemoteAddr())
+}
+
+func writeHandlerError(w io.Writer, handlerErr *HandlerError) {
+	err := response.WriteStatusLine(w, handlerErr.StatusCode)
+	if err != nil {
+		log.Printf("ERROR: Cannot write status line: %v", err)
+		return
+	}
+
+	errorHeaders := response.GetDefaultHeaders(len(handlerErr.Message))
+	err = response.WriteHeaders(w, errorHeaders)
+	if err != nil {
+		log.Printf("ERROR: Cannot write headers: %v", err)
+		return
+	}
+
+	_, err = w.Write([]byte(handlerErr.Message))
+	if err != nil {
+		log.Printf("ERROR: Cannot write body: %v", err)
 		return
 	}
 }

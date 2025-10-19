@@ -41,7 +41,6 @@ func (r *Request) done() bool {
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	const bufferSize = 8
 	buf := make([]byte, bufferSize)
-
 	readToIndex := 0
 
 	request := &Request{
@@ -51,25 +50,37 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 	for !request.done() {
 		if readToIndex == len(buf) {
 			newBuf := make([]byte, len(buf)*2)
-			copy(newBuf, buf)
+			copy(newBuf, buf[:readToIndex])
 			buf = newBuf
 		}
 
 		n, readErr := reader.Read(buf[readToIndex:])
 		readToIndex += n
 
-		bytesParsed, err := request.parse(buf[:readToIndex])
+		// Parse all available data in buffer (loop until nothing more can be parsed)
+		for {
+			bytesParsed, err := request.parse(buf[:readToIndex])
+			if err != nil {
+				return nil, err
+			}
 
-		if bytesParsed > 0 {
+			// If nothing was parsed, we need more data
+			if bytesParsed == 0 {
+				break
+			}
+
+			// Compact buffer after successful parse
 			remainingBytes := readToIndex - bytesParsed
 			copy(buf, buf[bytesParsed:readToIndex])
 			readToIndex = remainingBytes
+
+			// Check if request is complete after parsing
+			if request.done() {
+				break
+			}
 		}
 
-		if err != nil {
-			return nil, err
-		}
-
+		// Handle read errors after parsing
 		if readErr != nil {
 			if readErr == io.EOF {
 				if !request.done() {
