@@ -1,49 +1,25 @@
 package main
 
 import (
-	"fmt"
+	"httpfromtcp/internal/server"
 	"log"
-	"net"
-
-	"httpfromtcp/internal/request"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
-const port = ":42069"
+const port = 42069
 
 func main() {
-	listener, err := net.Listen("tcp", port)
+	server, err := server.Serve(port)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error starting server: %v", err)
 	}
-	defer listener.Close()
+	defer server.Close()
+	log.Println("Server started on port", port)
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Fatal(err)
-			break
-		}
-		fmt.Printf("Connection success from %s\n", conn.RemoteAddr())
-
-		request, err := request.RequestFromReader(conn)
-		if err != nil {
-			log.Fatal("error reading request from conn", err)
-			break
-		}
-		fmt.Printf(
-			"Request line: \n - Method: %s\n - Target: %s\n - Version: %s\n",
-			request.RequestLine.Method,
-			request.RequestLine.RequestTarget,
-			request.RequestLine.HttpVersion)
-
-		for key, value := range request.Headers {
-			fmt.Printf("Header: %s: %s\n", key, value)
-		}
-
-		if len(request.Body) > 0 {
-			fmt.Printf("Body: %s\n", string(request.Body))
-		}
-
-		fmt.Printf("Connection close from %s\n", conn.RemoteAddr())
-	}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+	log.Println("Server gracefully stopped")
 }
